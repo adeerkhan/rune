@@ -51,6 +51,32 @@ impl SurfaceRetries {
     pub(super) fn failures(&self) -> u8 { self.replacements }
 }
 
+/// On Windows: the window's OLE drop target, forgotten when the window goes. Windows reuses
+/// handles, and a target left registered for a window that has gone keeps the handle marked as
+/// registered, which would leave a later window with the same handle taking no drops at all.
+#[cfg(target_os = "windows")]
+pub(super) struct DropTarget {
+    hwnd: isize,
+}
+
+#[cfg(target_os = "windows")]
+impl DropTarget {
+    pub(super) fn new(window: &winit::window::Window) -> Option<Self> {
+        let hwnd = match window.window_handle().ok()?.as_raw() {
+            winit::raw_window_handle::RawWindowHandle::Win32(h) => h.hwnd.get() as isize,
+            _ => return None,
+        };
+        Some(Self { hwnd })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for DropTarget {
+    fn drop(&mut self) {
+        crate::platform::win32::drop_target::forget(self.hwnd);
+    }
+}
+
 /// The open window. Fields drop in order: what's native to the OS, then the surface before its
 /// window.
 pub(super) struct Win {
@@ -88,6 +114,9 @@ pub(super) struct Win {
     /// The window's steady run after a change (`STEADY`).
     #[cfg(target_os = "windows")]
     pub(super) steady: Steady,
+    /// On Windows: forgets the window's drop target when the window goes.
+    #[cfg(target_os = "windows")]
+    pub(super) drop_target: Option<DropTarget>,
     /// Its next frame (`redraw`).
     pub(super) redraw: std::cell::Cell<Redraw>,
 }

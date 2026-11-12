@@ -113,6 +113,29 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
     )
 }
 
+/// A JSON string literal: the escapes JSON needs, and nothing else.
+fn json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String {
     let text = TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
     let mut rt = Runtime::with_text(S { src, dark, streaming }, view, (width, 900.0), Env::new(dark, 2.0), text);
@@ -122,10 +145,10 @@ fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String 
     let els = rt.elements();
     for (i, e) in els.iter().enumerate() {
         let r = e.rect;
-        let _ = write!(out, "{{\"path\":{:?},\"role\":{:?},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{:?}", e.path, e.role, r[0], r[1], r[2], r[3], e.fill.hex());
-        if let Some(k) = &e.key { let _ = write!(out, ",\"key\":{k:?}"); }
-        if let Some(t) = &e.text { let _ = write!(out, ",\"text\":{t:?}"); }
-        if let Some(c) = e.text_color { let _ = write!(out, ",\"color\":{:?}", c.hex()); }
+        let _ = write!(out, "{{\"path\":{},\"role\":{},\"rect\":[{:.2},{:.2},{:.2},{:.2}],\"fill\":{}", json(&e.path), json(&e.role), r[0], r[1], r[2], r[3], json(&e.fill.hex()));
+        if let Some(k) = &e.key { let _ = write!(out, ",\"key\":{}", json(k)); }
+        if let Some(t) = &e.text { let _ = write!(out, ",\"text\":{}", json(t)); }
+        if let Some(c) = e.text_color { let _ = write!(out, ",\"color\":{}", json(&c.hex())); }
         if e.opacity != 1.0 { let _ = write!(out, ",\"opacity\":{:.3}", e.opacity); }
         out.push('}');
         out.push_str(if i + 1 < els.len() { ",\n" } else { "\n" });

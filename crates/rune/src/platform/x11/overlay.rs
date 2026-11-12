@@ -5,6 +5,31 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 thread_local! {
     static SHOWN: std::cell::RefCell<Vec<(u32, crate::OverlayLevel)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The connection the pointer and display queries go through. Opening one costs a socket, an
+    /// auth cookie and a setup handshake, and these run on the UI thread — once per pointer
+    /// sample for a follow-pointer overlay.
+    static QUERIES: std::cell::RefCell<Option<(RustConnection, usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs a query on the connection the pointer and display lookups share, opening one the first
+/// time it is asked for. A connection that has gone (the server restarted) is dropped, so the next
+/// query opens a fresh one; a query that simply has no answer leaves it alone.
+fn with_queries<T>(f: impl FnOnce(&RustConnection, usize) -> Result<Option<T>, x11rb::errors::ReplyError>) -> Option<T> {
+    QUERIES.with(|queries| {
+        let mut cached = queries.borrow_mut();
+        if cached.is_none() {
+            *cached = x11rb::connect(None).ok();
+        }
+        let (connection, screen) = cached.as_ref()?;
+        match f(connection, *screen) {
+            Ok(answer) => answer,
+            Err(_) => {
+                // The connection has gone: the next query opens a fresh one.
+                *cached = None;
+                None
+            }
+        }
+    })
 }
 
 pub(crate) struct InputWindow {
@@ -106,15 +131,17 @@ impl InputWindow {
 impl Drop for InputWindow { fn drop(&mut self) { self.hide(); } }
 
 pub(crate) fn pointer_position() -> Option<(i32, i32)> {
-    let (connection, screen) = x11rb::connect(None).ok()?;
-    let root = connection.setup().roots.get(screen)?.root;
-    let p = connection.query_pointer(root).ok()?.reply().ok()?;
-    p.same_screen.then_some((i32::from(p.root_x), i32::from(p.root_y)))
+    with_queries(|connection, screen| {
+        let Some(root) = connection.setup().roots.get(screen).map(|s| s.root) else { return Ok(None) };
+        let p = connection.query_pointer(root)?.reply()?;
+        Ok(p.same_screen.then_some((i32::from(p.root_x), i32::from(p.root_y))))
+    })
 }
 
 pub(crate) fn output_crtc(output: u32) -> Option<u32> {
     use x11rb::protocol::randr::ConnectionExt as _;
-    let (connection, _) = x11rb::connect(None).ok()?;
-    let crtc = connection.randr_get_output_info(output, x11rb::CURRENT_TIME).ok()?.reply().ok()?.crtc;
-    (crtc != 0).then_some(crtc)
+    with_queries(|connection, _| {
+        let crtc = connection.randr_get_output_info(output, x11rb::CURRENT_TIME)?.reply()?.crtc;
+        Ok((crtc != 0).then_some(crtc))
+    })
 }

@@ -47,6 +47,15 @@ pub(crate) fn mute(on: bool) {
     MUTED.with(|m| m.set(on));
 }
 
+/// Forgets a window's drop target, so a later window that gets the same handle registers its
+/// own. Windows reuses handles, and a target registered for a window that has gone keeps the
+/// handle marked as registered, which would leave the new window taking no drops at all.
+pub(crate) fn forget(hwnd: isize) {
+    DESTS.with(|d| {
+        d.borrow_mut().remove(&hwnd);
+    });
+}
+
 fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     match window.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut _)),

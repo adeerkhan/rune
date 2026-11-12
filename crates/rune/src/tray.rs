@@ -101,7 +101,12 @@ pub(crate) fn remove_all() {
 
 impl Tray {
     pub fn new(spec: TraySpec, on_event: impl Fn(TrayEvent) + Send + Sync + 'static) -> Result<Self, TrayError> {
-        if spec.icon.rgba.len() != spec.icon.width as usize * spec.icon.height as usize * 4 {
+        // The expected pixel count can overflow for a large icon, so it is checked rather than
+        // multiplied: an overflow would panic in a debug build and wrap in a release one.
+        let pixels = (spec.icon.width as usize)
+            .checked_mul(spec.icon.height as usize)
+            .and_then(|n| n.checked_mul(4));
+        if pixels != Some(spec.icon.rgba.len()) {
             return Err(TrayError::Backend("tray icon size doesn't match its pixels".into()));
         }
         #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
@@ -137,5 +142,15 @@ mod tests {
     fn a_short_icon_is_refused() {
         let spec = TraySpec::new("t", "T", TrayIcon::rgba(2, 2, vec![0; 3]));
         assert!(matches!(Tray::new(spec, |_| {}), Err(TrayError::Backend(_))));
+    }
+
+    #[test]
+    fn an_icon_size_that_overflows_is_refused_rather_than_panicking() {
+        // `width * height * 4` overflows `usize` for these, which would panic in a debug build
+        // and wrap to a passing check in a release one.
+        for (w, h) in [(1u32 << 31, 1u32 << 31), (u32::MAX, u32::MAX), (u32::MAX, 2)] {
+            let spec = TraySpec::new("t", "T", TrayIcon::rgba(w, h, Vec::new()));
+            assert!(matches!(Tray::new(spec, |_| {}), Err(TrayError::Backend(_))), "{w}x{h}");
+        }
     }
 }

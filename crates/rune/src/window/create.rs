@@ -242,6 +242,8 @@ impl<S: 'static> Host<S> {
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
+        #[cfg(target_os = "windows")]
+        let drop_target = super::win::DropTarget::new(&window);
         self.win = Some(Win {
             a11y,
             native,
@@ -259,6 +261,8 @@ impl<S: 'static> Host<S> {
             presented: None,
             #[cfg(target_os = "windows")]
             steady: Steady::Rest,
+            #[cfg(target_os = "windows")]
+            drop_target,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(Instant::now()); }

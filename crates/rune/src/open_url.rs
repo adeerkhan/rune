@@ -65,6 +65,10 @@ fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     {
         return Err(OpenUrlError::Invalid);
     }
+    // A URL that starts with `//` names another host (scheme-relative): it is not relative to
+    // this page, so it goes through the scheme check below and is refused like any other
+    // absolute URL. Only a URL that starts with a path, a query or a fragment is relative.
+    let relative = relative && !url.starts_with("//");
     if relative && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
         return Ok(url.to_owned());
     }
@@ -182,17 +186,47 @@ fn open(url: &str) -> Result<(), OpenUrlError> {
 
 #[cfg(target_os = "macos")]
 fn percent_encode_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
+    encode_url_for_nsurl(url)
+}
+
+/// Percent-encodes the bytes a URL's path, query and fragment may not carry, and leaves the
+/// authority alone.
+///
+/// A host is not a percent-encoded string: encoding one turns `münchen.de` into the host
+/// `m%C3%BCnchen.de`, which no resolver answers, so the link never opens. The host is left as it
+/// was written and the rest of the URL is encoded, as a URL without a host (a `mailto:`) is
+/// encoded whole.
+fn encode_url_for_nsurl(url: &str) -> std::borrow::Cow<'_, str> {
+    if url.is_ascii() { return std::borrow::Cow::Borrowed(url); }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return encode_all_non_ascii(url);
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let mut out = String::with_capacity(url.len() + 16);
+    out.push_str(scheme);
+    out.push_str("://");
+    out.push_str(authority);
+    encode_all_non_ascii_into(tail, &mut out);
+    std::borrow::Cow::Owned(out)
+}
+
+fn encode_all_non_ascii(url: &str) -> std::borrow::Cow<'_, str> {
     if url.is_ascii() { return std::borrow::Cow::Borrowed(url); }
     let mut out = String::with_capacity(url.len() + 16);
+    encode_all_non_ascii_into(url, &mut out);
+    std::borrow::Cow::Owned(out)
+}
+
+fn encode_all_non_ascii_into(url: &str, out: &mut String) {
+    use std::fmt::Write;
     for &b in url.as_bytes() {
         if b < 0x80 {
             out.push(b as char);
         } else {
-            use std::fmt::Write;
             let _ = write!(out, "%{b:02X}");
         }
     }
-    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(target_os = "windows")]
@@ -260,6 +294,34 @@ mod tests {
         assert_eq!(check_link("/a b", true), Err(OpenUrlError::Invalid));
         assert_eq!(check_link("HTTPS://example.com/x", true).as_deref(), Ok("https://example.com/x"));
         assert_eq!(check_same_tab("/notes/42"), Err(OpenUrlError::Invalid), "native has no page to resolve against");
+    }
+
+    #[test]
+    fn a_scheme_relative_link_names_another_host_and_is_refused() {
+        // `//host/path` is not relative to this page: the browser resolves it against the page's
+        // scheme and leaves the origin, so it goes through the scheme check like any other
+        // absolute URL and is refused.
+        for link in ["//evil.example/x", "//evil.example", "//evil.example/x?q=1#f"] {
+            assert_eq!(check_link(link, true), Err(OpenUrlError::Invalid), "{link:?}");
+            assert_eq!(check_link(link, false), Err(OpenUrlError::Invalid), "{link:?}");
+        }
+        // A path that merely starts with a slash is still relative.
+        assert_eq!(check_link("/notes/42", true).as_deref(), Ok("/notes/42"));
+    }
+
+    #[test]
+    fn the_host_is_not_percent_encoded() {
+        // A host is not a percent-encoded string: encoding one turns `münchen.de` into a host no
+        // resolver answers, so the link never opens.
+        assert_eq!(encode_url_for_nsurl("https://münchen.de"), "https://münchen.de");
+        assert_eq!(encode_url_for_nsurl("https://münchen.de/straße"), "https://münchen.de/stra%C3%9Fe");
+        assert_eq!(encode_url_for_nsurl("https://example.com/a?q=ü"), "https://example.com/a?q=%C3%BC");
+        assert_eq!(encode_url_for_nsurl("https://例え.jp"), "https://例え.jp");
+        // A URL without an authority is encoded whole.
+        assert_eq!(encode_url_for_nsurl("mailto:someone@example.com"), "mailto:someone@example.com");
+        assert_eq!(encode_url_for_nsurl("mailto:ü@example.com"), "mailto:%C3%BC@example.com");
+        // An ASCII URL is left alone.
+        assert_eq!(encode_url_for_nsurl("https://example.com/a"), "https://example.com/a");
     }
 
     #[test]

@@ -264,6 +264,8 @@ impl<S: 'static> Host<S> {
             let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting };
             Native { cloak, frame, _occlusion: crate::platform::win32::occlusion::Tracked::new(&window, report), mode, a11y_start }
         };
+        #[cfg(target_os = "windows")]
+        let drop_target = super::win::DropTarget::new(&window);
         self.win = Some(Win {
             a11y,
             native,
@@ -280,9 +282,10 @@ impl<S: 'static> Host<S> {
             timer_frame: TimerFrame::default(),
             presented: None,
             steady: Steady::Rest,
+            #[cfg(target_os = "windows")]
+            drop_target,
             redraw: std::cell::Cell::new(Redraw::Idle),
-        });
-        self.apply_placement(event_loop);
+        });        self.apply_placement(event_loop);
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
