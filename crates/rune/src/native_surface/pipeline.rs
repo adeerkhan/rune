@@ -78,7 +78,10 @@ pub struct SurfaceRenderer {
     timing_pool: Option<Arc<TimingPool>>,
     queries: Option<Arc<TimingSlot>>,
     queries_used: std::sync::atomic::AtomicBool,
-    pub(super) completion: std::sync::mpsc::SyncSender<()>,
+    pub(super) completion: Option<std::sync::mpsc::SyncSender<()>>,
+    /// The thread that polls the device until the renderer goes. It is joined in `Drop`,
+    /// before the device: a poll on a device that is being torn down crashes the driver.
+    completion_thread: Option<std::thread::JoinHandle<()>>,
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     extra: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
@@ -95,6 +98,16 @@ pub struct SurfaceRenderer {
     #[cfg(target_os = "windows")]
     shared: Option<windows::Importer>,
 }
+impl Drop for SurfaceRenderer {
+    /// The completion thread polls the device, so it has to be done before the device goes: a
+    /// poll on a device that is being torn down reaches freed driver state and crashes. Dropping
+    /// the sender ends the thread's wait, and joining waits for the poll in flight.
+    fn drop(&mut self) {
+        self.completion.take();
+        if let Some(thread) = self.completion_thread.take() { thread.join().ok(); }
+    }
+}
+
 impl SurfaceRenderer {
     #[cfg(target_arch = "wasm32")]
     pub fn new(_: &wgpu::Device, _: wgpu::TextureFormat) -> Self {
@@ -156,7 +169,7 @@ impl SurfaceRenderer {
         });
         let (completion, receiver) = std::sync::mpsc::sync_channel(1);
         let poll_device = device.clone();
-        std::thread::Builder::new()
+        let completion_thread = std::thread::Builder::new()
             .name("rune-video-completion".into())
             .spawn(move || {
                 // Nonblocking poll releases wgpu's snatch lock before sleeping. A fence wait here
@@ -184,7 +197,8 @@ impl SurfaceRenderer {
             timing_pool,
             queries: None,
             queries_used: std::sync::atomic::AtomicBool::new(false),
-            completion,
+            completion: Some(completion),
+            completion_thread: Some(completion_thread),
             pipeline,
             format,
             extra: Vec::new(),
@@ -609,7 +623,7 @@ impl SurfaceRenderer {
                     }
                 });
                 queue.submit([timestamps.finish()]);
-                let _ = completion.try_send(());
+                if let Some(completion) = &completion { let _ = completion.try_send(()); }
             });
         } else {
             encoder.on_submitted_work_done(move || {
@@ -621,7 +635,7 @@ impl SurfaceRenderer {
         }
         let index = queue.submit([encoder.finish()]);
         self.release_decoded(queue);
-        let _ = self.completion.try_send(());
+        if let Some(completion) = &self.completion { let _ = completion.try_send(()); }
         index
     }
 
