@@ -36,7 +36,7 @@ impl Clock {
 
     /// Driven by `step()` at a fixed rate, starting at τ = 0.
     pub fn manual(hz: f64) -> Clock {
-        assert!(hz > 0.0);
+        assert!(hz > 0.0 && hz.is_finite(), "a manual clock needs a finite rate above 0");
         Clock { source: Source::Manual { hz }, ..Clock::display() }
     }
 
@@ -60,7 +60,11 @@ impl Clock {
 
     /// Manual mode: one frame (`1/hz` seconds × scale, or nothing while paused). Returns τ.
     pub fn step(&mut self) -> f64 {
-        let Source::Manual { hz } = self.source else { panic!("Clock::step needs Clock::manual") };
+        let Source::Manual { hz } = self.source else {
+            // A display clock is driven by `frame(host)`, which has the host timestamp `step`
+            // lacks; stepping one would move it by a time nothing asked for.
+            return self.now;
+        };
         self.frame += 1;
         if !self.paused {
             self.base += self.scale / hz;

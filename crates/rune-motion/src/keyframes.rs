@@ -112,7 +112,12 @@ impl AnimationStore {
     /// Under Reduce Motion, spatial tracks jump to the final value and fades take the short fade.
     pub fn play_keyframes<T: Animatable>(&mut self, node: crate::NodeId, prop: Prop<T>, kf: &Keyframes<T>) -> TrackId {
         let Some(last) = kf.last_value() else {
-            return self.track_id(node, prop).unwrap_or_else(|| panic!("empty keyframes on a new property"));
+            // An empty track plays nothing: the property keeps the value it has and the caller
+            // gets its track back, the same as any other play that changes nothing.
+            let start = self.sample(node, prop).unwrap_or_else(|| T::read_lanes(&[0.0; crate::value::MAX_LANES][..T::LANES]));
+            let init = lanes(&start);
+            let t = self.ensure(node, prop.id, prop.class, &init[..T::LANES]) as usize;
+            return self.id_of(t);
         };
         let first = kf.frames[0].value();
         let start = if self.has(node, prop) { self.sample(node, prop).unwrap() } else { first };

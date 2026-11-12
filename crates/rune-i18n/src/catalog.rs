@@ -51,7 +51,7 @@ impl Messages {
 
     /// The message for key index `key`, or `None` when this locale lacks it.
     pub fn get(&self, key: usize) -> Option<&'static str> {
-        let at = key * 8;
+        let at = key.checked_mul(8)?;
         let span = self.spans.get(at..at + 8)?;
         let start = u32::from_le_bytes([span[0], span[1], span[2], span[3]]);
         if start == u32::MAX {
@@ -73,6 +73,8 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// A catalog from its generated parts. The first locale is the source locale every key has a
+    /// message in, so a catalog needs at least one.
     pub const fn new(
         keys: &'static [&'static str],
         plurals: &'static [&'static str],
@@ -80,6 +82,7 @@ impl Catalog {
         locales: &'static [LocaleInfo],
         messages: &'static [Messages],
     ) -> Self {
+        assert!(!locales.is_empty(), "a catalog needs a source locale");
         Self { keys, plurals, plural_forms, locales, messages }
     }
 
